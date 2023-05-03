@@ -86,7 +86,7 @@ $$
 为什么要这样设定 SCAD 惩罚项的函数？因为在这样的惩罚项下，估计系数和 $\hat\beta^{ols}$ 的关系为：
 
 $$
-\hat{\beta}_j^{\text {scad }}= \begin{cases}\operatorname{sgn}\left(\hat{\beta}_j^{\text {ols }}\right)\left(\left|\hat{\beta}_j^{\text {ols }}\right|-\lambda\right)_{+} & \text {if }\left|\hat{\beta}_j^{\mathrm{ols}}\right| \leq 2 \lambda \\ \frac{(a-1) \hat{\beta}_j^{\text {ols }}-\operatorname{sgn}\left(\hat{\beta}_j^{\text {ols }}\right) a \lambda}{(a-2)} & \text { if } 2 \lambda<\left|\hat{\beta}_j^{\text {ols }}\right| \leq a \lambda \\ \hat{\beta}_j^{\text {ols }}\left(\text { if }\left|\hat{\beta}_j^{\mathrm{ols}}\right|>a \lambda\right.\end{cases}
+\hat{\beta}_j^{\text {scad }}= \begin{cases}\operatorname{sgn}\left(\hat{\beta}_j^{\text {ols }}\right)\left(\left|\hat{\beta}_j^{\text {ols }}\right|-\lambda\right)_{+} & \text {if }\left|\hat{\beta}_j^{\mathrm{ols}}\right| \leq 2 \lambda \\ \frac{(a-1) \hat{\beta}_j^{\text {ols }}-\operatorname{sgn}\left(\hat{\beta}_j^{\text {ols }}\right) a \lambda}{(a-2)} & \text { if } 2 \lambda<\left|\hat{\beta}_j^{\text {ols }}\right| \leq a \lambda \\ \hat{\beta}_j^{\text {ols }} &\text { if }\left|\hat{\beta}_j^{\mathrm{ols}}\right|>a \lambda\end{cases}
 $$
 
 ![image-20230415160210939](README-image/image-20230415160210939.png)
