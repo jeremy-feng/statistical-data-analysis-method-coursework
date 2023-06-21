@@ -1,0 +1,622 @@
+---
+title: "sgl_assign"
+author: "冯超"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+## 改正后的表达式
+
+### sgl1 中正确的梯度表达式
+
+$$
+\frac{1}{n}  X^{(k)^{\top}}\left(X^{(k)} \beta-r_{(-k)}\right)
+$$
+
+### sgl3 中正确的损失函数表达式
+
+$$
+l(\beta^{(k,l)} = \frac{1}{n} \sum_{i=1}^n\left[\log \left(1+e^{x_i^{\top} \beta}\right)-y_i x_i^{\top} \beta\right]
+$$
+
+### sgl3 中正确的梯度表达式
+
+$$
+\frac{1}{n} \sum_{i=1}^n\left[x_i \frac{e^{x_i^{\top} \beta}}{1+e^{x_i^{\top} \beta}}-x_i  y_i\right]
+$$
+
+## sgl_assgin.R 代码
+
+```{r}
+###################################### NAIVE IMPLEMENTATIONS OF SPARSE GROUP LASSO ######################################
+#
+# inputs:  x:      	n*p matrix, corresponding to the design matrix
+#         y:      	n*1 vector, corresponding to the reponse
+#         grpVec:	p*1 vector, indicating which group each covariate is in
+#         alpha:	scalar, corresponding to the combination parameter
+#         lambda:	scalar, corresponding to the universal penalty
+#         maxIterO: scalar, maximum number of iterations of the outer loop
+#         maxIterI: scalar, maximum number of iterations of the inner loop
+#         thrO:     scalar, threshold for convergence of the outer loop
+#         thrI:     scalar, threshold for convergence of the inner loop
+#         stepSize: scalar, step size
+#
+# outputs: beta:		p*1 vector, solution for beta
+# 		  iterO:	scalar, actual number of outer loops
+#
+# Some remarks:
+# 1. We assume that all the inputs are valid and suitable according to their definitions.
+# 2. When using the algorithms, sometimes it might not converge given the default values. In such case, you can adjust the default parameter values.
+# 3. All possible inputs and outputs of sgl1 and sgl2 are given above.
+# 4. All inputs of the functions to complete (after line 222) can be inferred from the paper ``A Sparse-Group Lasso''.
+#
+
+library(dplyr)
+
+sgl1 <- function(x, y, grpVec, alpha, lambda, maxIterO = 1e3, maxIterI = 1e3, thrO = 1e-5, thrI = 1e-5, stepSize = 1e-3) {
+    # Group indices.
+    grps <- unique(grpVec)
+    # Number of groups.
+    J <- length(grps)
+
+    # Design matrix dimensions.
+    n <- dim(x)[1]
+    p <- dim(x)[2]
+
+    # Randomly initialize beta used in iterations. (Other approaches may also work.)
+    beta <- matrix(rnorm(p, 0, 2), p, 1)
+
+    # Initialize the temporary variable used in iterations. (Other approaches may also work.)
+    betaTemp <- beta + 1
+
+    # Outer loop.
+    for (iterO in 1:maxIterO) {
+        # Check the change of beta between two iterations as a criterion for convergence of the algorithm. (A naive and intuitive one for simplicity of this assignment.)
+        if (norm(betaTemp - beta, type = "2") <= thrO * sqrt(p)) {
+            # Return a list of two items.
+            return(list(beta, iterO))
+        } else {
+            betaTemp <- beta
+
+            # Update beta for each k.
+            for (k in grps) {
+                # Calculate the residual apart from group k.
+                rk <- calculaterk(x, y, beta, grpVec, k)
+
+                # Calculate the gradient at betak with other beta fixed.
+                gradk <- calculateGradk(x[, grpVec == k], rk, beta[grpVec == k, 1], sum(grpVec == k))
+
+                # Check if betak = 0.
+                if (norm(threshOperator(calculateGradk(x[, grpVec == k], rk, matrix(0, sum(grpVec == k), 1), sum(grpVec == k)) * n, alpha * lambda), type = "2") <= (1 - alpha) * lambda) {
+                    beta[grpVec == k] <- 0
+                } else {
+                    # Inner loop.
+                    for (iterI in 1:maxIterI) {
+                        betaTempI <- beta[grpVec == k, 1]
+
+                        # Update betak.
+                        beta[grpVec == k, 1] <- updateU1(beta[grpVec == k, 1], gradk, alpha, lambda, stepSize)
+
+                        # Check the change of betak between two iterations as a criterion for convergence of the algorithm. (A naive and intuitive one for simplicity of this assignment.)
+                        if (norm(betaTempI - beta[grpVec == k, 1], type = "2") <= thrI * sqrt(sum(grpVec == k))) {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # Return a list of two items.
+    return(list(beta, iterO))
+}
+
+
+sgl2 <- function(x, y, grpVec, alpha, lambda, maxIterO = 1e3, maxIterI = 1e3, thrO = 1e-5, thrI = 1e-5) {
+    # Group indices.
+    grps <- unique(grpVec)
+    # Number of groups.
+    J <- length(grps)
+
+    # Design matrix dimensions.
+    n <- dim(x)[1]
+    p <- dim(x)[2]
+
+    # Calculate the penalty using equation (3).
+    pens <- calculatePenalty(grpVec, grps, lambda)
+
+    # Randomly initialize beta used in iterations. (Other approaches may also work.)
+    beta <- matrix(rnorm(p, 0, 2), p, 1)
+
+    # Initialize the temporary variable used in iterations. (Other approaches may also work.)
+    betaTemp <- beta + 1
+
+    # Outer loop.
+    for (iterO in 1:maxIterO) {
+        # Check the change of beta between two iterations as a criterion for convergence of the algorithm. (A naive and intuitive one for simplicity of this assignment.)
+        if (norm(betaTemp - beta, type = "2") <= thrO * sqrt(p)) {
+            # Return a list of two items.
+            return(list(beta, iterO))
+        } else {
+            betaTemp <- beta
+
+            # Update beta for each k.
+            for (k in grps) {
+                # Calculate the residual apart from group k.
+                rk <- calculaterk(x, y, beta, grpVec, k)
+
+                # Check if betak = 0.
+                if (norm(threshOperator(calculateGradk(x[, grpVec == k], rk, matrix(0, sum(grpVec == k), 1), sum(grpVec == k)) * n, alpha * lambda), type = "2") <= (1 - alpha) * pens[pens[, 1] == k, 2]) {
+                    beta[grpVec == k, 1] <- 0
+                } else {
+                    # Initialize thetak.
+                    thetak <- beta[grpVec == k, 1]
+
+                    # Initialize deltak.
+                    deltak <- matrix(1e-2, sum(grpVec == k), 1)
+
+                    # Inner loop.
+                    for (iterI in 1:maxIterI) {
+                        # Calculate the gradient at betak with other beta fixed.
+                        gradk <- calculateGradk(x[, grpVec == k], rk, beta[grpVec == k, 1], sum(grpVec == k))
+
+                        # Update betak, thetak and deltak.
+                        outList <- updateNesterov(x[, grpVec == k], beta[grpVec == k, 1], thetak, deltak, rk, gradk, alpha, lambda, pens[pens[, 1] == k, 2], iterI, n)
+                        beta[grpVec == k, ] <- outList[[1]]
+                        thetak <- outList[[2]]
+                        deltak <- outList[[3]]
+
+                        # Calculate the residual apart from group k.
+                        rk <- calculaterk(x, y, beta, grpVec, k)
+
+                        # Check the change of betak between two iterations as a criterion for convergence of the algorithm. (A naive and intuitive one for simplicity of this assignment.)
+                        if (norm(deltak, type = "2") <= thrI * sqrt(sum(grpVec == k))) {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # Return a list of two items.
+    return(list(beta, iterO))
+}
+
+
+sgl3 <- function(x, y, grpVec, alpha, lambda, maxIterO = 1e2, maxIterI = 1e2, thrO = 1e-4, thrI = 1e-4) {
+    # Group indices.
+    grps <- unique(grpVec)
+    # Number of groups.
+    J <- length(grps)
+
+    # Design matrix dimensions.
+    n <- dim(x)[1]
+    p <- dim(x)[2]
+
+    # Calculate the penalty using equation (3).
+    pens <- calculatePenalty(grpVec, grps, lambda)
+
+    # Randomly initialize beta used in iterations. (Other approaches may also work.)
+    beta <- matrix(rnorm(p, 0, 0.1), p, 1)
+
+    # Initialize the temporary variable used in iterations. (Other approaches may also work.)
+    betaTemp <- beta + 1
+
+    # Outer loop.
+    for (iterO in 1:maxIterO) {
+        # Check the change of beta between two iterations as a criterion for convergence of the algorithm. (A naive and intuitive one for simplicity of this assignment.)
+        if (norm(betaTemp - beta, type = "2") <= thrO * sqrt(p)) {
+            # Return a list of two items.
+            return(list(beta, iterO))
+        } else {
+            betaTemp <- beta
+
+            # Update beta for each k.
+            for (k in grps) {
+                # Check if betak = 0.
+                betak0 <- beta
+                betak0[grpVec == k, 1] <- 0
+                if (norm(threshOperator(calculateGradLogistic(x, y, hBeta(x, betak0))[grpVec == k, ] * n, alpha * lambda), type = "2") <= (1 - alpha) * pens[pens[, 1] == k, 2]) {
+                    beta[grpVec == k, 1] <- 0
+                } else {
+                    # Initialize theta.
+                    theta <- beta
+
+                    # Initialize delta.
+                    delta <- matrix(1e-2, p, 1)
+
+                    # Inner loop.
+                    for (iterI in 1:maxIterI) {
+                        # Update beta, theta and delta.
+                        outList <- updateNesterovLogistic(x, y, beta, theta, delta, alpha, lambda, pens[pens[, 1] == k, 2], iterI, grpVec, k)
+                        beta <- outList[[1]]
+                        theta <- outList[[2]]
+                        delta <- outList[[3]]
+
+                        # Check the change of betak between two iterations as a criterion for convergence of the algorithm. (A naive and intuitive one for simplicity of this assignment.)
+                        if (norm(delta[grpVec == k, ], type = "2") <= thrI * sqrt(sum(grpVec == k))) {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # Return a list of two items.
+    return(list(beta, iterO))
+}
+
+
+###################################### COMPLETE THE FOLLOWING FUNCTIONS P1 ######################################
+
+# Implement the thresholding function.
+# Return a length(z)*1 vector.
+threshOperator <- function(z, thr) {
+    zNew <- sign(z) * pmax(0, abs(z) - thr)
+    return(zNew)
+}
+
+# Calculate the residuals apart from group k.
+# Return a n*1 vector.
+calculaterk <- function(x, y, beta, grpVec, k) {
+    # Calculate the indices of all other groups except group k
+    other_idx <- which(grpVec != k)
+    # Calculate the fitted values of all other groups except group k
+    fitted_other <- matrix(x[, other_idx], ncol = length(other_idx)) %*% beta[other_idx]
+    # Calculate the residuals apart from group k
+    rk <- y - fitted_other
+    return(rk)
+}
+
+# Calculate the gradient at betak with other beta fixed.
+# Return a pk*1 vector.
+calculateGradk <- function(xk, rk, betak, pk) {
+    gradk <- t(xk) %*% (matrix(xk, ncol = pk) %*% betak - rk) / length(rk)
+    return(gradk)
+}
+
+# Update betak using the alogorithm of the first part of Section 3.2, with penalties corresponding to equation (8).
+# Return a pk*1 vector.
+updateU1 <- function(betak, gradk, alpha, lambda, stepSize) {
+    # Calculate the numerator and denominator of part 1 of equation (13).
+    numerator <- stepSize * (1 - alpha) * lambda
+    denominator <- norm(threshOperator(betak - stepSize * gradk, stepSize * alpha * lambda), type = "2")
+    part_1 <- max(0, 1 - numerator / denominator)
+    # Calculate part 2 of equation (13).
+    part_2 <- threshOperator(betak - stepSize * gradk, stepSize * alpha * lambda)
+    betakNew <- part_1 * part_2
+    return(betakNew)
+}
+
+
+###################################### COMPLETE THE FOLLOWING FUNCTIONS P2 ######################################
+
+# Calculate the penalty using equation (3).
+# Return a J*2 vector. The first column is the group index, and the second is the corresponding penalty.
+calculatePenalty <- function(grpVec, grps, lambda) {
+    # Number of groups.
+    J <- length(grps)
+    pens <- matrix(0, J, 2)
+    for (i in seq_along(grps)) {
+        k <- grps[i]
+        pl <- sum(grpVec == k)
+        pen <- cbind(k, lambda * sqrt(pl))
+        pens[i, ] <- pen
+    }
+    return(pens)
+}
+
+# A generalized version of the function updateU1, with penalties corresponding to equation (3).
+# Return a pk*1 vector.
+updateU2 <- function(betak, gradk, alpha, lambda, pensk, stepSize) {
+    # Calculate the numerator and denominator of part 1 of equation (13).
+    # 相比 updateU1，这里的 numerator 从 lambda 变成了 pensk
+    numerator <- stepSize * (1 - alpha) * pensk
+    denominator <- norm(threshOperator(betak - stepSize * gradk, stepSize * alpha * lambda), type = "2")
+    # 如果 denominator 为 0，那么 part_1 为 0
+    if (denominator == 0) {
+        part_1 <- 0
+    } else {
+        part_1 <- max(0, 1 - numerator / denominator)
+    }
+    # Calculate part 2 of equation (13).
+    part_2 <- threshOperator(betak - stepSize * gradk, stepSize * alpha * lambda)
+    betakNew <- part_1 * part_2
+    return(betakNew)
+}
+
+# Update betak using the alogorithm of the second part of Section 3.2.
+# Return a list of (updated betak, updated thetak and updated deltak). All of them are pk*1 vectors.
+updateNesterov <- function(xk, betak, thetak, deltak, rk, gradk, alpha, lambda, pensk, iterI, n) {
+    pk <- length(betak)
+    # 初始化 stepSize
+    stepSize <- 1
+    updateU2_betak <- updateU2(betak, gradk, alpha, lambda, pensk, stepSize)
+    deltak <- updateU2_betak - betak
+    # ***参考论文P236下方Inner loop第2步，Backtracking***
+    while (norm(rk - matrix(xk, ncol = pk) %*% updateU2_betak, type = "2")^2 / (2 * n) > norm(rk - matrix(xk, ncol = pk) %*% betak, type = "2")^2 / (2 * n) + t(gradk) %*% deltak + norm(deltak, type = "2")^2 / (2 * stepSize)) {
+        stepSize <- 0.8 * stepSize
+        updateU2_betak <- updateU2(betak, gradk, alpha, lambda, pensk, stepSize)
+    }
+    # ***参考论文P236下方Inner loop第3、4、5步***
+    thetakNew <- updateU2_betak
+    betakNew <- thetak + iterI / (iterI + 3) * (thetakNew - thetak)
+    deltakNew <- thetakNew - thetak
+    return(list(betakNew, thetakNew, deltakNew))
+}
+
+
+###################################### COMPLETE THE FOLLOWING FUNCTIONS P3 ######################################
+
+hBeta <- function(x, beta) {
+    h <- exp(x %*% beta)
+    h <- h / (1 + h)
+    return(h)
+}
+
+# Calculate the logistic gradient at beta.
+# Return a p*1 vector.
+calculateGradLogistic <- function(x, y, h) {
+    grad <- t(x) %*% (h - y) / length(y)
+    return(grad)
+}
+
+# Update beta for logistic regression using Nesterov-style momentum updates.
+# Return a list of (updated beta, updated theta and updated delta). All of them are p*1 vectors.
+updateNesterovLogistic <- function(x, y, beta, theta, delta, alpha, lambda, pensk, iterI, grpVec, k) {
+    # 样本数
+    n <- dim(x)[1]
+    # 根据 grpVec 和 k，提取第 k 组的数据
+    betak <- beta[grpVec == k]
+    thetak <- theta[grpVec == k]
+    gradk <- calculateGradLogistic(x, y, hBeta(x, beta))[grpVec == k, ]
+    # 初始化 stepSize
+    stepSize <- 1
+    # 更新 betak
+    updateU2_beta <- beta
+    updateU2_betak <- updateU2(betak, gradk, alpha, lambda, pensk, stepSize)
+    updateU2_beta[grpVec == k] <- updateU2_betak
+    deltak <- updateU2_betak - betak
+    # ***参考论文P236下方Inner loop第2步，Backtracking***
+    while ((sum(log(1 + exp(x %*% updateU2_beta))) - t(y) %*% x %*% updateU2_beta) / n > (sum(log(1 + exp(x %*% beta))) - t(y) %*% x %*% beta) / n + t(gradk) %*% deltak + norm(deltak, type = "2")^2 / (2 * stepSize)) {
+        stepSize <- 0.8 * stepSize
+        updateU2_betak <- updateU2(betak, gradk, alpha, lambda, pensk, stepSize)
+        updateU2_beta[grpVec == k] <- updateU2_betak
+    }
+    # ***参考论文P236下方Inner loop第3、4、5步***
+    thetakNew <- updateU2_betak
+    betakNew <- thetak + iterI / (iterI + 3) * (thetakNew - thetak)
+    deltakNew <- thetakNew - thetak
+    # 更新 beta
+    betaNew <- beta
+    betaNew[grpVec == k] <- betakNew
+    # 更新 theta
+    thetaNew <- theta
+    thetaNew[grpVec == k] <- thetakNew
+    # 更新 delta
+    deltaNew <- delta
+    deltaNew[grpVec == k] <- deltakNew
+    return(list(betaNew, thetaNew, deltaNew))
+}
+```
+
+## 获取数据
+
+```{r}
+library(ggplot2)
+library(Biobase)
+library(GEOquery)
+library(glmnet)
+library(SGL)
+library(grplasso)
+library("GSA")
+
+## This grabs the data from bioconductor
+
+gds807 <- getGEO('GDS807', destdir = ".")
+
+## This preprocesses it
+
+eset <- GDS2eSet(gds807, do.log2 = TRUE)
+```
+
+```{r}
+## This constructs our design matrix and reponse
+
+y <- (as.numeric(pData(eset)$disease.state) < 2)
+X <- t(exprs(eset))
+
+## Here we remove all genes with > 50% missingness
+## This function is used to mean impute the missing data
+
+mean.impute <- function(X) {
+  means <- apply(X, 2, function(x) {
+    mean(x[which(!is.na(x))])
+  })
+  for (i in 1:ncol(X)) {
+    ind <- which(is.na(X[, i]))
+    X[ind, i] <- means[i]
+  }
+  return(X)
+}
+
+## This function checks what proportion of the data is missing
+
+prop.missing <- function(X) {
+  apply(X, 2, function(x) {
+    mean(is.na(x))
+  })
+}
+
+prop.m <- prop.missing(X)
+remove.ind <- which(prop.m > 0.5)
+imp.X <- mean.impute(X[,-remove.ind])
+X <- imp.X
+
+## This grabs the gene identifiers
+
+Gene.Identifiers <- Table(gds807)[-remove.ind,2]
+
+## The following code creates the group index using the C1 genesets
+
+filename="./C1.gmt"
+junk1=GSA.read.gmt(filename)
+
+index <- rep(0,length(Gene.Identifiers))
+for(i in 1:277){
+  indi <- match(junk1$genesets[[i]],Gene.Identifiers)
+  index[indi] <- i
+}
+
+Gene.set.info <- junk1  
+dim(X)
+length(y)
+ind.include <- which(index != 0)
+genenames <- Gene.Identifiers[ind.include]
+X <- X[,ind.include]
+membership.index <- rep(0,ncol(X))
+for(i in 1:277){ 
+  for(j in 1:length(Gene.set.info$genesets[[i]])){
+    change.ind <- match(Gene.set.info$genesets[[i]][j],genenames)
+    if(!is.na(change.ind)){
+      if(membership.index[change.ind] == 0){
+        membership.index[change.ind] <- i
+      }
+    }
+  }
+}
+
+## In the following section we train our models and test on heldout data
+
+set.seed(0) 
+
+## We choose a training and test set
+
+training.ind <- sample(1:nrow(X), 30)
+
+train.data <- list(x = X[training.ind,], y = y[training.ind])
+test.data <- list(x = X[-training.ind,], y = y[-training.ind])
+
+## We standardize the variables for the group lasso
+
+x.gl <- t(t(train.data$x) - apply(train.data$x,2,mean))
+x.gl <- t(t(x.gl) / apply(x.gl,2,sd))
+x.gl <- cbind(1, x.gl)
+```
+
+## 应用 Group Lasso
+```{r}
+## This runs the group lasso code
+
+index.gl <- c(NA, membership.index)
+lambda.max.group <- lambdamax(x.gl, as.numeric(train.data$y), index.gl, standardize = FALSE)
+#print(lambda.max.group)
+lambdas.gl <- exp(seq(from = log(lambda.max.group), to = log(lambda.max.group*0.1), length.out = 100))
+fit.gl <- grplasso(x.gl, as.numeric(train.data$y), index.gl, lambda = lambdas.gl, standardize = FALSE)
+
+## We classify held out observations
+
+t.x.gl <- t(t(test.data$x) - apply(test.data$x,2,mean))
+t.x.gl <- t(t(t.x.gl) / apply(t.x.gl,2,sd))
+t.x.gl <- cbind(1, t.x.gl)
+
+test.pred.GL <- predict(fit.gl, t.x.gl)
+test.pred.GL <- exp(test.pred.GL) / (1 + exp(test.pred.GL))
+```
+
+## 应用 Lasso
+```{r}
+fit <- glmnet(train.data$x, train.data$y, family = "binomial", lambda.min.ratio = 0.1) # 0.01?
+
+#predict(fit, test.data$x, type = "class")
+test.pred <- predict(fit, test.data$x, type = "response")
+```
+
+## 应用 Sparse Group Lasso
+```{r}
+# 先用已有的包，但仅为得到 lambdas，并没有用到它拟合的结果
+fitSGL <- SGL(train.data, membership.index, type = "logit", verbose = TRUE, nlam = 100, min.frac = 0.1, alpha = 0.05) 
+# 提取 lambdas
+lambdas.sgl <- fitSGL$lambdas
+# 构造矩阵，存放 SGL 的预测结果
+test.pred.SGL <- matrix(NA, ncol = length(fitSGL$lambdas), nrow = length(test.data$y))
+
+# 遍历 lambdas.sgl，应用 Sparse Group Lasso
+# 设置进度条
+library(progress)
+pb <- progress_bar$new(total = 100, clear = FALSE)
+for(i in 1:length(lambdas.sgl)){
+    lambda <- fitSGL$lambdas[i]
+    # 更新进度条
+    pb$tick()
+    # 拟合模型
+    model <- sgl3(train.data$x, train.data$y, membership.index, alpha = 0.05, lambda = lambda)
+    # 提取系数
+    beta <- model[[1]]
+    # 预测标签为 1 的概率
+    y_pred_prob <- hBeta(test.data$x, beta)
+    test.pred.SGL[,i] <- y_pred_prob
+}
+```
+
+```{r}
+## We see how well each model performed
+
+correct.class <- (test.pred > 0.5) * test.data$y + (test.pred < 0.5)* (1-test.data$y)
+
+correct.class.SGL <- (test.pred.SGL > 0.5) * test.data$y + (test.pred.SGL < 0.5)* (1-test.data$y)
+
+correct.class.GL <- (test.pred.GL > 0.5) * test.data$y + (test.pred.GL < 0.5)* (1-test.data$y)
+
+c.l <- apply(correct.class,2,mean)
+c.gl <- apply(correct.class.GL,2,mean)
+c.sgl <- apply(correct.class.SGL,2,mean)
+
+max(c.sgl)
+max(c.gl)
+max(c.l)
+
+best.sgl <- which.max(c.sgl)
+best.gl <- which.max(c.gl)
+best.l <- which.max(c.l)
+
+best.ind.SGL <- which(fitSGL$beta[,best.sgl] != 0)
+best.ind.GL <- which(fitSGL$beta[,best.gl] != 0)
+best.ind.l <- which(fit$beta[,best.l] != 0)
+
+Gene.set.info$geneset.names[unique(membership.index[best.ind.SGL])]
+Gene.set.info$geneset.names[unique(membership.index[best.ind.GL])]
+unique(membership.index[best.ind.l])
+
+c.class <- c(c.gl,c.l,c.sgl)
+Method <- c(rep("GL",100),rep("Lasso", 100),rep("SGL",100))
+c.lambda <- c(1:100, 1:100,1:100)
+```
+
+```{r}
+## We plot the results
+
+#pdf("cancer.pdf")
+dd <- data.frame(Method = Method, x = c.lambda, y = c.class)
+
+ggplot(data = dd, 
+       aes(x = x, y = y, group = Method, shape = Method)) + 
+  geom_line(aes(linetype = Method), linewidth = 1.5) + 
+  scale_y_continuous("Correct Classification Rate") + 
+  scale_x_continuous("Lambda Index") + 
+  labs(title = "Correct Classification Rate for Cancer Data") +
+  theme(
+    legend.text = element_text(size = 20),
+    plot.title = element_text(size = 22),
+    axis.title.x = element_text(size = 20),
+    axis.title.y = element_text(size = 20, angle = 90),
+    legend.key.size = unit(2, "cm")
+  ) +
+  scale_linetype_manual(values = c("twodash", "dotted", "solid"))
+```
+
+从解的稀疏性来看，Lambda越大，越可能得到稀疏解。其中，Group Lasso和Sparse Group Lasso都能得到整组稀疏的系数，即同一组内的系数均为0，但Lasso并没有考虑整组的稀疏性，只是将单个变量的系数置为0。考察组内的稀疏性，Group Lasso无法在组内进一步将某个变量的系数置为0，而Sparse Group Lasso仍会将组内的某些变量置为0。
+
+从分类准确率的结果来看，Sparse Group Lasso的分类效果较好，最高的分类准确率最高能达到近80%。但我进行多次实验后发现，三种模型的拟合结果受随机种子的影响较大，因此我认为该结果并不十分可靠。此外，Lambda取值大小也对分类效果有影响。根据原始论文提供的代码，Sparse Group Lasso选用的Lambda范围大致为0.003到0.03之间。越小的Lambda会使得运行速度越慢，即训练耗时越长，但我手动实现的sgl3函数运行100个lambda耗时4个小时，因此我没有对大量的lambda参数进行实验，而是借用论文调包时产生的lambda列表。
